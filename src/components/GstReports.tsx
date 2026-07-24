@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import toast from "react-hot-toast";
 import {
     HiOutlineShieldCheck, HiOutlineKey, HiOutlineArrowPath, HiOutlineArrowDownTray,
@@ -129,10 +129,31 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
     const [progress, setProgress] = useState("");
     const [fetchMode, setFetchMode] = useState<"essential" | "all">("essential");
     const [report, setReport] = useState<{ type: ReportType; raw: any; label: string } | null>(null);
+    const [cachedCount, setCachedCount] = useState(0);
 
     const kind = REPORTS.find((r) => r.key === type)!.kind;
-    
     const rangeArray = kind === "period_range" ? getPeriodsBetween(fromPeriod, toPeriod) : [];
+
+    // Pre-check cache status
+    useEffect(() => {
+        let active = true;
+        if (kind === "period_range" && rangeArray.length > 0) {
+            let count = 0;
+            Promise.all(rangeArray.map(async (p) => {
+                let key = "";
+                if (type === "gstr1" || type === "gstr2a") key = fetchMode === "essential" ? `rep:${gstin}:${type}:${p}:ess` : `rep:${gstin}:${type}:${p}`;
+                else if (type === "gstr2b") key = `rep:${gstin}:2b:${p}`;
+                else if (type === "gstr3b") key = `rep:${gstin}:3b:${p}`;
+                
+                const c = await cacheGet(key, REPORT_TTL);
+                if (c) count++;
+            })).then(() => {
+                if (active) setCachedCount(count);
+            });
+        }
+        return () => { active = false; };
+    }, [kind, type, fromPeriod, toPeriod, fetchMode, gstin]);
+    
     const currentRangeLabel = kind === "period_range" 
         ? (rangeArray.length === 1 ? periodLabel(fromPeriod) : `${periodLabel(rangeArray[0])} – ${periodLabel(rangeArray[rangeArray.length-1])}`)
         : `${toApiDate(frdt)} – ${toApiDate(todt)}`;
@@ -302,9 +323,14 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                 </div>
             )}
             
-            <button className="btn btn-primary w-full mb-4" onClick={run} disabled={loading} style={isShowingCurrent ? { background: "var(--color-surface)", color: "var(--color-text)", border: "1px solid var(--color-border)" } : {}}>
+            {kind === "period_range" && !isShowingCurrent && !loading && cachedCount > 0 && (
+                <div className="text-xs font-semibold mb-2 text-center" style={{ color: cachedCount === rangeArray.length ? "var(--color-ok)" : "var(--color-text-secondary)" }}>
+                    {cachedCount === rangeArray.length ? "✅ All months are already cached! (0 credits to load)" : `⚡ ${cachedCount}/${rangeArray.length} months are already cached!`}
+                </div>
+            )}
+            <button className="btn btn-primary w-full mb-4" onClick={run} disabled={loading} style={(isShowingCurrent || cachedCount === rangeArray.length) && !loading ? { background: "var(--color-surface)", color: "var(--color-text)", border: "1px solid var(--color-border)" } : {}}>
                 {loading ? <span className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(255,255,255,.4)", borderTopColor: "#fff" }} /> : <HiOutlineArrowPath className="w-5 h-5" />}
-                {loading ? (progress || "Fetching…") : (isShowingCurrent ? `Fetch ${REPORTS.find((r) => r.key === type)!.label} again` : `Fetch ${REPORTS.find((r) => r.key === type)!.label}`)}
+                {loading ? (progress || "Fetching…") : (isShowingCurrent ? `Report ready. Fetch again?` : (cachedCount === rangeArray.length ? `Load ${REPORTS.find((r) => r.key === type)!.label} from Cache` : `Fetch ${REPORTS.find((r) => r.key === type)!.label}`))}
             </button>
 
             {report && report.type === "gstr2b" && <Gstr2bView data={report.raw} name={`GSTR2B_${gstin}_${fromPeriod}-${toPeriod}`} />}
