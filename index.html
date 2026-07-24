@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#020617" />
+  <meta name="description" content="Naqd GST — fetch, view & reconcile GSTR-1, GSTR-2A and GSTR-2B" />
+  <link rel="icon" type="image/svg+xml" href="/icons/icon-192.svg" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+
+  <title>Naqd GST</title>
+
+  <!-- Fallback background while JS/CSS load -->
+  <style>
+    html { background: #f4f5f7; }
+    html[data-theme="dark"] { background: #0b1020; }
+  </style>
+</head>
+
+<body class="antialiased">
+  <div id="root"></div>
+  <!-- Apply the saved theme before first paint so there's never a white flash.
+       Must match VALID in src/context/ThemeContext.tsx. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("naqdexim-theme");
+        if (t !== "dark" && t !== "light") t = "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* keep the static dark default */ }
+    })();
+  </script>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

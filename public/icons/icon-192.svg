@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6"/>
+      <stop offset="100%" style="stop-color:#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="40" fill="url(#bg)"/>
+  <!-- QR-like pattern -->
+  <g fill="white" opacity="0.95">
+    <!-- Top-left corner square -->
+    <rect x="36" y="36" width="36" height="36" rx="4"/>
+    <rect x="42" y="42" width="24" height="24" rx="2" fill="url(#bg)"/>
+    <rect x="48" y="48" width="12" height="12" rx="1"/>
+    <!-- Top-right corner square -->
+    <rect x="120" y="36" width="36" height="36" rx="4"/>
+    <rect x="126" y="42" width="24" height="24" rx="2" fill="url(#bg)"/>
+    <rect x="132" y="48" width="12" height="12" rx="1"/>
+    <!-- Bottom-left corner square -->
+    <rect x="36" y="120" width="36" height="36" rx="4"/>
+    <rect x="42" y="126" width="24" height="24" rx="2" fill="url(#bg)"/>
+    <rect x="48" y="132" width="12" height="12" rx="1"/>
+    <!-- Data dots -->
+    <rect x="84" y="36" width="12" height="12" rx="2"/>
+    <rect x="84" y="60" width="12" height="12" rx="2"/>
+    <rect x="84" y="84" width="24" height="24" rx="3"/>
+    <rect x="36" y="84" width="12" height="12" rx="2"/>
+    <rect x="60" y="84" width="12" height="12" rx="2"/>
+    <rect x="120" y="84" width="12" height="12" rx="2"/>
+    <rect x="144" y="84" width="12" height="12" rx="2"/>
+    <rect x="84" y="120" width="12" height="12" rx="2"/>
+    <rect x="84" y="144" width="12" height="12" rx="2"/>
+    <rect x="120" y="120" width="12" height="12" rx="2"/>
+    <rect x="144" y="120" width="12" height="12" rx="2"/>
+    <rect x="120" y="144" width="12" height="12" rx="2"/>
+    <rect x="144" y="144" width="12" height="12" rx="2"/>
+  </g>
+</svg>
