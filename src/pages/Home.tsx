@@ -83,11 +83,16 @@ export default function Home() {
             </div>
 
             {clients.length === 0 ? (
-                <div className="card p-10 text-center">
-                    <HiOutlineUserGroup className="w-10 h-10 mx-auto mb-3" style={{ color: "var(--color-text-muted)" }} />
-                    <p className="font-semibold" style={{ color: "var(--color-text)" }}>No clients yet</p>
-                    <p className="muted text-sm mt-1 mb-4">Add a client GSTIN to track its GST filing status.</p>
-                    <button className="btn btn-primary mx-auto" onClick={() => setShowAdd(true)}><HiOutlinePlus className="w-4 h-4" /> Add client</button>
+                <div className="card p-12 text-center relative overflow-hidden flex flex-col items-center justify-center">
+                    <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: "radial-gradient(circle at center, var(--color-primary) 2px, transparent 2px)", backgroundSize: "24px 24px" }} />
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 animate-float relative z-10" style={{ background: "var(--color-primary-soft)" }}>
+                        <HiOutlineUserGroup className="w-8 h-8" style={{ color: "var(--color-primary)" }} />
+                    </div>
+                    <p className="font-bold text-lg relative z-10" style={{ color: "var(--color-text)" }}>No clients yet</p>
+                    <p className="muted text-sm mt-1.5 mb-6 max-w-sm relative z-10">Add a client GSTIN to instantly track its GST filing status month-by-month.</p>
+                    <button className="btn btn-primary relative z-10 shadow-lg shadow-indigo-500/20" onClick={() => setShowAdd(true)}>
+                        <HiOutlinePlus className="w-5 h-5" /> Add your first client
+                    </button>
                 </div>
             ) : (
                 <div className="space-y-2.5">
@@ -127,7 +132,7 @@ function StripRow({ label, cells, loading }: { label: string; cells?: FilingCell
             <div className="flex gap-[3px] flex-wrap">
                 {cells
                     ? cells.map((c) => <span key={c.period} title={`${periodLabel(c.period)} · ${c.state}`} className={`${STATE_TO_CELL[c.state]} rounded-[3px]`} style={{ width: 15, height: 15, minHeight: 0, padding: 0 }} />)
-                    : Array.from({ length: 12 }).map((_, i) => <span key={i} className="rounded-[3px]" style={{ width: 15, height: 15, background: "var(--color-surface-hover)", opacity: loading ? 0.6 : 0.3 }} />)}
+                    : Array.from({ length: 12 }).map((_, i) => <span key={i} className={`rounded-[3px] ${loading ? "skeleton" : ""}`} style={{ width: 15, height: 15, background: "var(--color-surface-hover)", opacity: loading ? 1 : 0.3 }} />)}
             </div>
             {summ && (summ.late > 0 || summ.notfiled > 0) && (
                 <span className="text-[10px] font-semibold" style={{ color: summ.notfiled ? "var(--color-bad)" : "var(--color-late)" }}>

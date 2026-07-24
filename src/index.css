@@ -95,8 +95,8 @@ body {
     border-radius: 14px;
     box-shadow: var(--shadow-sm);
   }
-  .card-hover { transition: box-shadow .15s ease, border-color .15s ease, transform .15s ease; }
-  .card-hover:hover { box-shadow: var(--shadow-md); border-color: var(--color-border-strong); }
+  .card-hover { transition: box-shadow .2s ease, border-color .2s ease, transform .2s ease; }
+  .card-hover:hover { box-shadow: var(--shadow-md); border-color: var(--color-primary); transform: translateY(-2px) scale(1.01); }
 
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
@@ -154,6 +154,22 @@ body {
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .animate-fade-in { animation: fadeIn .2s ease-out; }
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.animate-float { animation: float 3s ease-in-out infinite; }
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--color-surface-hover) 25%, var(--color-border) 50%, var(--color-surface-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
 
 input, select, textarea { font-size: 16px; }
 @media (min-width: 640px) { input, select, textarea { font-size: 15px; } }

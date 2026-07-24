@@ -38,6 +38,18 @@ function ThemedToaster() {
                     border: "1px solid var(--color-toast-border)", borderRadius: "10px", fontSize: "14px",
                     boxShadow: "var(--shadow-md)",
                 },
+                success: {
+                    iconTheme: {
+                        primary: "var(--color-ok)",
+                        secondary: "var(--color-toast-bg)",
+                    },
+                },
+                error: {
+                    iconTheme: {
+                        primary: "var(--color-bad)",
+                        secondary: "var(--color-toast-bg)",
+                    },
+                },
             }}
         />
     );
