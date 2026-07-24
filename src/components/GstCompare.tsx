@@ -21,7 +21,7 @@ async function loadReturn(type: string, gstin: string, period: string, s: GstSes
     const short = type === "gstr2b" ? "2b" : type === "gstr3b" ? "3b" : type;
     const isMultiSec = type === "gstr1" || type === "gstr2a";
     const key = isMultiSec && fetchMode === "essential" ? `rep:${gstin}:${short}:${period}:ess` : `rep:${gstin}:${short}:${period}`;
-    const c = cacheGet<any>(key, TTL);
+    const c = await cacheGet<any>(key, TTL);
     if (c) return c;
     let raw: any = null;
     if (type === "gstr2b") { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, period, s.txn, s.gstUsername); raw = r.ok ? r.data : null; }
@@ -35,7 +35,7 @@ async function loadReturn(type: string, gstin: string, period: string, s: GstSes
         for (const sec of secs) { try { const r = await gstAPI.fetchSection(type as any, sec, gstin, period, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
         raw = Object.keys(acc).length ? acc : null;
     }
-    if (raw != null) cacheSet(key, raw);
+    if (raw != null) await cacheSet(key, raw);
     return raw;
 }
 

@@ -1,47 +1,59 @@
-/**
- * Tiny localStorage + Memory cache with TTL — keeps WhiteBooks API usage down (#16).
- * Public data (filing status via rettrack) is cheap to cache for hours.
- * Large JSON payloads (GSTR-2B, multi-month GSTR-1) often exceed the 5MB localStorage quota.
- * The memory Map ensures they stay cached during the SPA session even if localStorage fails.
- */
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+export const supabase = supabaseUrl ? createClient(supabaseUrl, supabaseKey) : null;
 
 const memCache = new Map<string, { t: number; v: unknown }>();
 
-export function cacheGet<T>(key: string, ttlMs: number): T | null {
+export async function cacheGet<T>(key: string, ttlMs: number): Promise<T | null> {
     const mem = memCache.get(key);
     if (mem && (Date.now() - mem.t <= ttlMs)) return mem.v as T;
 
     try {
         const raw = localStorage.getItem("gcache:" + key);
-        if (!raw) return null;
-        const { t, v } = JSON.parse(raw);
-        if (Date.now() - t > ttlMs) return null;
-        memCache.set(key, { t, v }); // populate memory
-        return v as T;
-    } catch {
-        return null;
+        if (raw) {
+            const { t, v } = JSON.parse(raw);
+            if (Date.now() - t <= ttlMs) {
+                memCache.set(key, { t, v });
+                return v as T;
+            }
+        }
+    } catch { /* ignore */ }
+
+    if (supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('gst_cache')
+                .select('data, created_at')
+                .eq('key', key)
+                .single();
+                
+            if (data && !error) {
+                const ts = new Date(data.created_at).getTime();
+                if (Date.now() - ts <= ttlMs) {
+                    memCache.set(key, { t: ts, v: data.data });
+                    try { localStorage.setItem("gcache:" + key, JSON.stringify({ t: ts, v: data.data })); } catch {}
+                    return data.data as T;
+                }
+            }
+        } catch { /* ignore */ }
     }
+    return null;
 }
 
-export function cacheSet(key: string, v: unknown) {
-    memCache.set(key, { t: Date.now(), v });
+export async function cacheSet(key: string, v: unknown) {
+    const ts = Date.now();
+    memCache.set(key, { t: ts, v });
     try {
-        localStorage.setItem("gcache:" + key, JSON.stringify({ t: Date.now(), v }));
-    } catch {
-        /* quota — ignore, memory cache will handle it */
-    }
-}
+        localStorage.setItem("gcache:" + key, JSON.stringify({ t: ts, v }));
+    } catch { /* ignore */ }
 
-/** Age of a cached entry in minutes, or null if absent. */
-export function cacheAgeMin(key: string): number | null {
-    const mem = memCache.get(key);
-    if (mem) return Math.round((Date.now() - mem.t) / 60000);
-
-    try {
-        const raw = localStorage.getItem("gcache:" + key);
-        if (!raw) return null;
-        return Math.round((Date.now() - JSON.parse(raw).t) / 60000);
-    } catch {
-        return null;
+    if (supabase) {
+        try {
+            await supabase
+                .from('gst_cache')
+                .upsert({ key, data: v, created_at: new Date(ts).toISOString() });
+        } catch { /* ignore */ }
     }
 }

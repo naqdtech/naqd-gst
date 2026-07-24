@@ -17,9 +17,9 @@ import type { GstClient, GstTaxpayer } from "../types";
 const TRACK_TTL = 6 * 60 * 60 * 1000;
 async function loadTrack(gstin: string, fy: string, force = false): Promise<any[]> {
     const key = `track:${gstin}:${fy}`;
-    if (!force) { const c = cacheGet<any[]>(key, TRACK_TTL); if (c) return c; }
+    if (!force) { const c = await cacheGet<any[]>(key, TRACK_TTL); if (c) return c; }
     const ef = await gstAPI.track(gstin, fy);
-    cacheSet(key, ef);
+    await cacheSet(key, ef);
     return ef;
 }
 
@@ -38,9 +38,10 @@ export default function ClientDetail() {
 
     useEffect(() => {
         const key = `tp:${gstin}`;
-        const c = cacheGet<GstTaxpayer>(key, 30 * 24 * 60 * 60 * 1000);
-        if (c) { setTp(c); return; }
-        gstAPI.search(gstin).then((r) => { if (r.ok && r.taxpayer) { setTp(r.taxpayer); cacheSet(key, r.taxpayer); } }).catch(() => { });
+        cacheGet<GstTaxpayer>(key, 30 * 24 * 60 * 60 * 1000).then((c) => {
+            if (c) { setTp(c); return; }
+            gstAPI.search(gstin).then((r) => { if (r.ok && r.taxpayer) { setTp(r.taxpayer); cacheSet(key, r.taxpayer); } }).catch(() => { });
+        });
     }, [gstin]);
 
     const loadReturns = async (force = false) => {

@@ -20,10 +20,10 @@ import type { TaxBlock } from "../utils/gst";
 const REPORT_TTL = 24 * 60 * 60 * 1000;
 
 async function cached<T>(key: string, producer: () => Promise<T | null>): Promise<T | null> {
-    const c = cacheGet<T>(key, REPORT_TTL);
+    const c = await cacheGet<T>(key, REPORT_TTL);
     if (c) return c;
     const v = await producer();
-    if (v != null) cacheSet(key, v);
+    if (v != null) await cacheSet(key, v);
     return v;
 }
 

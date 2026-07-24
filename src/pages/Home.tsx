@@ -16,9 +16,9 @@ const TRACK_TTL = 6 * 60 * 60 * 1000;
 
 async function loadTrack(gstin: string, fy: string, force = false): Promise<any[]> {
     const key = `track:${gstin}:${fy}`;
-    if (!force) { const c = cacheGet<any[]>(key, TRACK_TTL); if (c) return c; }
+    if (!force) { const c = await cacheGet<any[]>(key, TRACK_TTL); if (c) return c; }
     const ef = await gstAPI.track(gstin, fy);
-    cacheSet(key, ef);
+    await cacheSet(key, ef);
     return ef;
 }
 
