@@ -126,10 +126,17 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
     const [frdt, setFrdt] = useState(fyStartISO(fyList()[0]));
     const [todt, setTodt] = useState(todayISO());
     const [loading, setLoading] = useState(false);
+    const [progress, setProgress] = useState("");
     const [fetchMode, setFetchMode] = useState<"essential" | "all">("essential");
     const [report, setReport] = useState<{ type: ReportType; raw: any; label: string } | null>(null);
 
     const kind = REPORTS.find((r) => r.key === type)!.kind;
+    
+    const rangeArray = kind === "period_range" ? getPeriodsBetween(fromPeriod, toPeriod) : [];
+    const currentRangeLabel = kind === "period_range" 
+        ? (rangeArray.length === 1 ? periodLabel(fromPeriod) : `${periodLabel(rangeArray[0])} – ${periodLabel(rangeArray[rangeArray.length-1])}`)
+        : `${toApiDate(frdt)} – ${toApiDate(todt)}`;
+    const isShowingCurrent = report && report.type === type && report.label === currentRangeLabel;
 
     // Credit estimator
     const creditsEst = useMemo(() => {
@@ -158,7 +165,7 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
     };
 
     const run = async () => {
-        setLoading(true); setReport(null);
+        setLoading(true); setReport(null); setProgress("");
         try {
             const s = session;
             if (kind === "period_range") {
@@ -166,6 +173,9 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                 if (!range.length) return toast.error("Invalid period range (From must be before To)");
                 const allData: { period: string; data: any }[] = [];
                 let hasError = false;
+                
+                let completed = 0;
+                setProgress(`Fetching 0/${range.length} months...`);
                 
                 await Promise.all(range.map(async (p) => {
                     try {
@@ -188,7 +198,10 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                             const raw = await cached(`rep:${gstin}:3b:${p}`, async () => { const r = await gstAPI.fetch3b(gstin, p, s.txn, s.gstUsername); return r.ok ? r.data : null; });
                             if (raw) allData.push({ period: p, data: raw });
                         }
-                    } catch (e) { hasError = true; }
+                    } catch (e) { hasError = true; } finally {
+                        completed++;
+                        setProgress(`Fetching ${completed}/${range.length} months...`);
+                    }
                 }));
                 
                 allData.sort((a, b) => {
@@ -280,9 +293,18 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
             <p className="text-[11px] muted mb-2 px-1">Estimated API credits: <b>~{creditsEst}</b></p>
 
 
-            <button className="btn btn-primary w-full mb-4" onClick={run} disabled={loading}>
+            {isShowingCurrent && (
+                <div className="card p-3 mb-3 flex items-center justify-between" style={{ background: "var(--color-primary-soft)", border: "1px solid var(--color-primary)" }}>
+                    <div className="flex items-center gap-2" style={{ color: "var(--color-primary)" }}>
+                        <HiOutlineCheckCircle className="w-5 h-5" />
+                        <span className="text-sm font-semibold">Report successfully generated and ready for download below!</span>
+                    </div>
+                </div>
+            )}
+            
+            <button className="btn btn-primary w-full mb-4" onClick={run} disabled={loading} style={isShowingCurrent ? { background: "var(--color-surface)", color: "var(--color-text)", border: "1px solid var(--color-border)" } : {}}>
                 {loading ? <span className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(255,255,255,.4)", borderTopColor: "#fff" }} /> : <HiOutlineArrowPath className="w-5 h-5" />}
-                {loading ? "Fetching…" : `Fetch ${REPORTS.find((r) => r.key === type)!.label}`}
+                {loading ? (progress || "Fetching…") : (isShowingCurrent ? `Fetch ${REPORTS.find((r) => r.key === type)!.label} again` : `Fetch ${REPORTS.find((r) => r.key === type)!.label}`)}
             </button>
 
             {report && report.type === "gstr2b" && <Gstr2bView data={report.raw} name={`GSTR2B_${gstin}_${fromPeriod}-${toPeriod}`} />}
