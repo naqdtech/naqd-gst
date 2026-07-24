@@ -23,6 +23,22 @@ export function fyPeriods(fy: string): string[] {
     return out;
 }
 
+/** Get all periods between two MMYYYY strings, inclusive. */
+export function getPeriodsBetween(fromP: string, toP: string): string[] {
+    if (!/^\d{6}$/.test(fromP) || !/^\d{6}$/.test(toP)) return [];
+    const m1 = +fromP.slice(0, 2), y1 = +fromP.slice(2);
+    const m2 = +toP.slice(0, 2), y2 = +toP.slice(2);
+    const start = y1 * 12 + m1, end = y2 * 12 + m2;
+    if (start > end) return [];
+    const out: string[] = [];
+    for (let i = start; i <= end; i++) {
+        let mo = i % 12, yr = Math.floor(i / 12);
+        if (mo === 0) { mo = 12; yr -= 1; }
+        out.push(String(mo).padStart(2, "0") + yr);
+    }
+    return out;
+}
+
 /** Financial year (Apr–Mar) for a date, e.g. "2026-27". */
 export function currentFy(d = new Date()): string {
     const y = d.getFullYear();
@@ -45,13 +61,15 @@ function docdata(data: any): Record<string, Gstr2bSupplier[]> {
 }
 
 /** Flatten GSTR-2B docdata into invoice-level rows (for tables / export). */
-export function flattenGstr2b(data: any): Record<string, any>[] {
+export function flattenGstr2b(data: any, period?: string): Record<string, any>[] {
     const dd = docdata(data);
     const rows: Record<string, any>[] = [];
     const push = (section: string, suppliers: Gstr2bSupplier[] = []) => {
         for (const s of suppliers) {
             for (const inv of s.inv || []) {
+                const baseRow = period ? { period: periodLabel(period) } : {};
                 rows.push({
+                    ...baseRow,
                     section,
                     supplier_gstin: s.ctin,
                     supplier: s.trdnm,
@@ -128,15 +146,16 @@ export const STATE_CELL: Record<FilingState, string> = {
 
 // ── GSTR-3B summary + ledgers ──
 
-export interface TaxRow { label: string; txval?: number; igst: number; cgst: number; sgst: number; cess: number; }
+export interface TaxRow { period?: string; label: string; txval?: number; igst: number; cgst: number; sgst: number; cess: number; }
 export interface TaxBlock { block: string; label: string; rows: TaxRow[]; }
 
-const heads = (o: any): Omit<TaxRow, "label"> => ({ txval: n(o?.txval), igst: n(o?.iamt), cgst: n(o?.camt), sgst: n(o?.samt), cess: n(o?.csamt) });
+const heads = (o: any): Omit<TaxRow, "label" | "period"> => ({ txval: n(o?.txval), igst: n(o?.iamt), cgst: n(o?.camt), sgst: n(o?.samt), cess: n(o?.csamt) });
 
 /** Parse a GSTR-3B retsum payload into readable blocks (defensive — skips absent parts). */
-export function parse3b(data: any): TaxBlock[] {
+export function parse3b(data: any, period?: string): TaxBlock[] {
     const d = data?.data || data || {};
     const out: TaxBlock[] = [];
+    const pAttr = period ? { period: periodLabel(period) } : {};
     const sup = d.sup_details || {};
     const supMap: [string, string][] = [
         ["osup_det", "Outward taxable (regular)"],
@@ -145,15 +164,15 @@ export function parse3b(data: any): TaxBlock[] {
         ["isup_rev", "Inward reverse-charge"],
         ["osup_nongst", "Non-GST outward"],
     ];
-    const supRows = supMap.filter(([k]) => sup[k]).map(([k, label]) => ({ label, ...heads(sup[k]) }));
+    const supRows = supMap.filter(([k]) => sup[k]).map(([k, label]) => ({ ...pAttr, label, ...heads(sup[k]) }));
     if (supRows.length) out.push({ block: "3.1", label: "Outward supplies & reverse charge", rows: supRows });
 
     const itc = d.itc_elg || {};
     const itcRows: TaxRow[] = [];
-    for (const it of (itc.itc_avl || [])) itcRows.push({ label: "ITC available · " + (it.ty || ""), ...heads(it) });
-    if (itc.itc_net) itcRows.push({ label: "Net ITC available", ...heads(itc.itc_net) });
-    for (const it of (itc.itc_rev || [])) itcRows.push({ label: "ITC reversed · " + (it.ty || ""), ...heads(it) });
-    for (const it of (itc.itc_inelg || [])) itcRows.push({ label: "Ineligible ITC · " + (it.ty || ""), ...heads(it) });
+    for (const it of (itc.itc_avl || [])) itcRows.push({ ...pAttr, label: "ITC available · " + (it.ty || ""), ...heads(it) });
+    if (itc.itc_net) itcRows.push({ ...pAttr, label: "Net ITC available", ...heads(itc.itc_net) });
+    for (const it of (itc.itc_rev || [])) itcRows.push({ ...pAttr, label: "ITC reversed · " + (it.ty || ""), ...heads(it) });
+    for (const it of (itc.itc_inelg || [])) itcRows.push({ ...pAttr, label: "Ineligible ITC · " + (it.ty || ""), ...heads(it) });
     if (itcRows.length) out.push({ block: "4", label: "Eligible ITC", rows: itcRows });
 
     return out;
@@ -243,7 +262,7 @@ export function isInvoiceSection(s: string): boolean {
 
 /** Flatten a ctin + inv[]/nt[] section (GSTR-1/2A B2B, CDN, EXP…) into invoice rows.
  *  Tax lives in inv.itms[].itm_det = {txval, iamt(IGST), camt(CGST), samt(SGST), csamt(cess), rt}. */
-export function flattenInvSection(sectionArr: any, label: string): Record<string, any>[] {
+export function flattenInvSection(sectionArr: any, label: string, period?: string): Record<string, any>[] {
     const rows: Record<string, any>[] = [];
     for (const sup of (Array.isArray(sectionArr) ? sectionArr : [])) {
         const docs = sup.inv || sup.nt || [];
@@ -253,7 +272,9 @@ export function flattenInvSection(sectionArr: any, label: string): Record<string
                 const dt = it.itm_det || it || {};
                 txval += n(dt.txval); igst += n(dt.iamt); cgst += n(dt.camt); sgst += n(dt.samt); cess += n(dt.csamt);
             }
+            const baseRow = period ? { period: periodLabel(period) } : {};
             rows.push({
+                ...baseRow,
                 section: label,
                 ctin: sup.ctin || "",
                 doc_no: doc.inum || doc.nt_num || "",

@@ -9,7 +9,7 @@ import { getSession, setSession, clearSession, sessionMinutesLeft } from "../uti
 import { upsertClient, getClient } from "../utils/gstSession";
 import { cacheGet, cacheSet } from "../utils/cache";
 import {
-    fyList, fyPeriods, periodLabel, flattenGstr2b, totalsGstr2b,
+    fyList, fyPeriods, periodLabel, flattenGstr2b, totalsGstr2b, getPeriodsBetween, taxZero, taxTotalTax,
     flattenInvSection, isInvoiceSection, GSTR1_SECTIONS, GSTR2A_SECTIONS, parse3b, ledgerRows,
 } from "../utils/gst";
 import { downloadJson, downloadCsv, downloadWorkbook } from "../utils/gstExport";
@@ -28,13 +28,13 @@ async function cached<T>(key: string, producer: () => Promise<T | null>): Promis
 }
 
 type ReportType = "gstr2b" | "gstr2a" | "gstr1" | "gstr3b" | "cash" | "credit";
-const REPORTS: { key: ReportType; label: string; kind: "month" | "range" }[] = [
-    { key: "gstr2b", label: "GSTR-2B", kind: "month" },
-    { key: "gstr2a", label: "GSTR-2A", kind: "month" },
-    { key: "gstr1", label: "GSTR-1 / 1A", kind: "month" },
-    { key: "gstr3b", label: "GSTR-3B", kind: "month" },
-    { key: "cash", label: "Cash ledger", kind: "range" },
-    { key: "credit", label: "Credit ledger", kind: "range" },
+const REPORTS: { key: ReportType; label: string; kind: "period_range" | "date_range" }[] = [
+    { key: "gstr2b", label: "GSTR-2B", kind: "period_range" },
+    { key: "gstr2a", label: "GSTR-2A", kind: "period_range" },
+    { key: "gstr1", label: "GSTR-1 / 1A", kind: "period_range" },
+    { key: "gstr3b", label: "GSTR-3B", kind: "period_range" },
+    { key: "cash", label: "Cash ledger", kind: "date_range" },
+    { key: "credit", label: "Credit ledger", kind: "date_range" },
 ];
 
 /** YYYY-MM-DD (date input) → DD-MM-YYYY (API). */
@@ -114,9 +114,15 @@ function OtpPanel({ gstin, gstUsername, onDone }: { gstin: string; gstUsername?:
 function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) {
     const { gstin } = session;
     const [type, setType] = useState<ReportType>("gstr2b");
-    const [fy, setFy] = useState(fyList()[0]);
-    const periods = useMemo(() => fyPeriods(fy), [fy]);
-    const [period, setPeriod] = useState(() => fyPeriods(fyList()[0])[0]);
+    
+    const [fromFy, setFromFy] = useState(fyList()[0]);
+    const fromPeriods = useMemo(() => fyPeriods(fromFy), [fromFy]);
+    const [fromPeriod, setFromPeriod] = useState(() => fyPeriods(fyList()[0])[0]);
+    
+    const [toFy, setToFy] = useState(fyList()[0]);
+    const toPeriods = useMemo(() => fyPeriods(toFy), [toFy]);
+    const [toPeriod, setToPeriod] = useState(() => fyPeriods(fyList()[0])[11] || fyPeriods(fyList()[0])[0]);
+
     const [frdt, setFrdt] = useState(fyStartISO(fyList()[0]));
     const [todt, setTodt] = useState(todayISO());
     const [loading, setLoading] = useState(false);
@@ -128,20 +134,44 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
         setLoading(true); setReport(null);
         try {
             const s = session;
-            if (type === "gstr2b") {
-                const raw = await cached(`rep:${gstin}:2b:${period}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, period, s.txn, s.gstUsername); return r.ok ? r.data : null; });
-                raw ? setReport({ type, raw, label: periodLabel(period) }) : toast.error("No GSTR-2B for this period (or session expired)");
-            } else if (type === "gstr1" || type === "gstr2a") {
-                const secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
-                const raw = await cached(`rep:${gstin}:${type}:${period}`, async () => {
-                    const acc: Record<string, any> = {};
-                    for (const sec of secs) { try { const r = await gstAPI.fetchSection(type, sec, gstin, period, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
-                    return Object.keys(acc).length ? acc : null;
+            if (kind === "period_range") {
+                const range = getPeriodsBetween(fromPeriod, toPeriod);
+                if (!range.length) return toast.error("Invalid period range (From must be before To)");
+                const allData: { period: string; data: any }[] = [];
+                let hasError = false;
+                
+                await Promise.all(range.map(async (p) => {
+                    try {
+                        if (type === "gstr2b") {
+                            const raw = await cached(`rep:${gstin}:2b:${p}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, p, s.txn, s.gstUsername); return r.ok ? r.data : null; });
+                            if (raw) allData.push({ period: p, data: raw });
+                        } else if (type === "gstr1" || type === "gstr2a") {
+                            const secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
+                            const raw = await cached(`rep:${gstin}:${type}:${p}`, async () => {
+                                const acc: Record<string, any> = {};
+                                for (const sec of secs) { try { const r = await gstAPI.fetchSection(type, sec, gstin, p, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
+                                return Object.keys(acc).length ? acc : null;
+                            });
+                            if (raw) allData.push({ period: p, data: raw });
+                        } else if (type === "gstr3b") {
+                            const raw = await cached(`rep:${gstin}:3b:${p}`, async () => { const r = await gstAPI.fetch3b(gstin, p, s.txn, s.gstUsername); return r.ok ? r.data : null; });
+                            if (raw) allData.push({ period: p, data: raw });
+                        }
+                    } catch (e) { hasError = true; }
+                }));
+                
+                allData.sort((a, b) => {
+                    const d1 = new Date(+a.period.slice(2), +a.period.slice(0, 2) - 1);
+                    const d2 = new Date(+b.period.slice(2), +b.period.slice(0, 2) - 1);
+                    return d1.getTime() - d2.getTime();
                 });
-                raw ? setReport({ type, raw, label: periodLabel(period) }) : toast.error("No data for this period (or session expired)");
-            } else if (type === "gstr3b") {
-                const raw = await cached(`rep:${gstin}:3b:${period}`, async () => { const r = await gstAPI.fetch3b(gstin, period, s.txn, s.gstUsername); return r.ok ? r.data : null; });
-                raw ? setReport({ type, raw, label: periodLabel(period) }) : toast.error("No GSTR-3B for this period (or session expired)");
+
+                if (hasError) toast.error("Some periods failed to fetch");
+                if (allData.length) {
+                    setReport({ type, raw: allData, label: range.length === 1 ? periodLabel(range[0]) : `${periodLabel(range[0])} – ${periodLabel(range[range.length-1])}` });
+                } else {
+                    toast.error("No data found for the selected range");
+                }
             } else {
                 const f = toApiDate(frdt), t = toApiDate(todt);
                 const raw = await cached(`rep:${gstin}:${type}:${f}_${t}`, async () => { const r = await gstAPI.fetchLedger(type as "cash" | "credit", gstin, f, t, s.txn, s.gstUsername); return r.ok ? r.data : null; });
@@ -172,14 +202,32 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
             </div>
 
             {/* period / date selector */}
-            {kind === "month" ? (
-                <div className="flex gap-2 mb-3">
-                    <select className="input flex-1" value={fy} onChange={(e) => { setFy(e.target.value); setPeriod(fyPeriods(e.target.value)[0]); }}>
-                        {fyList(6).map((y) => <option key={y} value={y}>FY {y}</option>)}
-                    </select>
-                    <select className="input flex-1" value={period} onChange={(e) => setPeriod(e.target.value)}>
-                        {periods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
-                    </select>
+            {kind === "period_range" ? (
+                <div className="flex flex-col gap-2 mb-3">
+                    <div className="flex gap-2 items-end">
+                        <div className="flex-1"><label className="label">From</label>
+                        <select className="input" value={fromFy} onChange={(e) => { setFromFy(e.target.value); setFromPeriod(fyPeriods(e.target.value)[0]); }}>
+                            {fyList(6).map((y) => <option key={y} value={y}>FY {y}</option>)}
+                        </select>
+                        </div>
+                        <div className="flex-1">
+                        <select className="input" value={fromPeriod} onChange={(e) => setFromPeriod(e.target.value)}>
+                            {fromPeriods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
+                        </select>
+                        </div>
+                    </div>
+                    <div className="flex gap-2 items-end">
+                        <div className="flex-1"><label className="label">To</label>
+                        <select className="input" value={toFy} onChange={(e) => { setToFy(e.target.value); setToPeriod(fyPeriods(e.target.value)[0]); }}>
+                            {fyList(6).map((y) => <option key={y} value={y}>FY {y}</option>)}
+                        </select>
+                        </div>
+                        <div className="flex-1">
+                        <select className="input" value={toPeriod} onChange={(e) => setToPeriod(e.target.value)}>
+                            {toPeriods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
+                        </select>
+                        </div>
+                    </div>
                 </div>
             ) : (
                 <div className="flex gap-2 mb-3 items-end">
@@ -193,9 +241,9 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                 {loading ? "Fetching…" : `Fetch ${REPORTS.find((r) => r.key === type)!.label}`}
             </button>
 
-            {report && report.type === "gstr2b" && <Gstr2bView data={report.raw} name={`GSTR2B_${gstin}_${period}`} />}
-            {report && (report.type === "gstr1" || report.type === "gstr2a") && <InvoiceView sections={report.raw} kind={report.type} name={`${report.type}_${gstin}_${period}`} />}
-            {report && report.type === "gstr3b" && <Gstr3bView data={report.raw} name={`GSTR3B_${gstin}_${period}`} />}
+            {report && report.type === "gstr2b" && <Gstr2bView data={report.raw} name={`GSTR2B_${gstin}_${fromPeriod}-${toPeriod}`} />}
+            {report && (report.type === "gstr1" || report.type === "gstr2a") && <InvoiceView sectionsData={report.raw} kind={report.type} name={`${report.type}_${gstin}_${fromPeriod}-${toPeriod}`} />}
+            {report && report.type === "gstr3b" && <Gstr3bView data={report.raw} name={`GSTR3B_${gstin}_${fromPeriod}-${toPeriod}`} />}
             {report && (report.type === "cash" || report.type === "credit") && <LedgerView data={report.raw} label={report.type === "cash" ? "Electronic Cash Ledger" : "Electronic Credit Ledger"} name={`${report.type}ledger_${gstin}`} />}
         </div>
     );
@@ -225,9 +273,18 @@ function DownloadRow({ onXlsx, onCsv, onJson, disabled }: { onXlsx?: () => void;
 }
 
 // ── GSTR-2B ──
-function Gstr2bView({ data, name }: { data: any; name: string }) {
-    const rows = useMemo(() => flattenGstr2b(data), [data]);
-    const t = useMemo(() => totalsGstr2b(data, ""), [data]);
+function Gstr2bView({ data, name }: { data: {period: string; data: any}[]; name: string }) {
+    const rows = useMemo(() => data.flatMap((d) => flattenGstr2b(d.data, d.period)), [data]);
+    const t = useMemo(() => {
+        const sums = taxZero();
+        let docs = 0;
+        data.forEach(d => {
+            const pt = totalsGstr2b(d.data, d.period);
+            sums.taxable += pt.taxable; sums.igst += pt.igst; sums.cgst += pt.cgst; sums.sgst += pt.sgst; sums.cess += pt.cess;
+            docs += pt.docs;
+        });
+        return { ...sums, docs, tax: taxTotalTax(sums) };
+    }, [data]);
     return (
         <div className="animate-fade-in">
             <Tiles items={[["Taxable value", inr(t.taxable, 2)], ["Total ITC", inr(t.tax, 2), true], ["Documents", String(t.docs)], ["CGST+SGST", inr(t.cgst + t.sgst, 0)]]} />
@@ -235,10 +292,11 @@ function Gstr2bView({ data, name }: { data: any; name: string }) {
             {rows.length > 0 && (
                 <div className="card overflow-x-auto">
                     <table className="data-table">
-                        <thead><tr><th>Supplier</th><th>Invoice</th><th className="text-right">Taxable</th><th className="text-right">ITC</th><th className="text-center">Avl</th></tr></thead>
+                        <thead><tr><th>Period</th><th>Supplier</th><th>Invoice</th><th className="text-right">Taxable</th><th className="text-right">ITC</th><th className="text-center">Avl</th></tr></thead>
                         <tbody>
                             {rows.map((r, i) => (
                                 <tr key={i}>
+                                    <td className="text-[11px] font-medium whitespace-nowrap">{r.period}</td>
                                     <td><div className="max-w-[160px] truncate">{r.supplier || r.supplier_gstin}</div><div className="font-mono text-[10px] muted">{r.supplier_gstin}</div></td>
                                     <td>{r.inv_no}<div className="text-[10px] muted">{r.inv_date}</div></td>
                                     <td className="text-right">{inr(r.taxable, 0)}</td>
@@ -255,24 +313,46 @@ function Gstr2bView({ data, name }: { data: any; name: string }) {
 }
 
 // ── GSTR-1 / GSTR-2A (multi-section) ──
-function InvoiceView({ sections, kind, name }: { sections: Record<string, any>; kind: string; name: string }) {
-    const rows = useMemo(() => Object.entries(sections).flatMap(([s, arr]) => (isInvoiceSection(s) ? flattenInvSection(arr, s.toUpperCase()) : [])), [sections]);
+function InvoiceView({ sectionsData, kind, name }: { sectionsData: {period: string; data: Record<string, any>}[]; kind: string; name: string }) {
+    const rows = useMemo(() => sectionsData.flatMap((d) => 
+        Object.entries(d.data).flatMap(([s, arr]) => (isInvoiceSection(s) ? flattenInvSection(arr, s.toUpperCase(), d.period) : []))
+    ), [sectionsData]);
     const t = rows.reduce((a, r) => { a.taxable += r.taxable; a.igst += r.igst; a.cgst += r.cgst; a.sgst += r.sgst; a.cess += r.cess; return a; }, { taxable: 0, igst: 0, cgst: 0, sgst: 0, cess: 0 });
     const tax = t.igst + t.cgst + t.sgst + t.cess;
-    const extras = Object.entries(sections).filter(([s, a]) => !isInvoiceSection(s) && (Array.isArray(a) ? a.length : a)).map(([s, a]) => `${s.toUpperCase()}${Array.isArray(a) ? ` (${a.length})` : ""}`);
-    const sheets = [{ name: "Invoices", rows }, ...Object.entries(sections).filter(([s, a]) => !isInvoiceSection(s) && Array.isArray(a) && a.length).map(([s, a]) => ({ name: s.toUpperCase().slice(0, 28), rows: a as any[] }))];
+    
+    const extrasSet = new Set<string>();
+    sectionsData.forEach(d => {
+        Object.entries(d.data).forEach(([s, a]) => {
+            if (!isInvoiceSection(s) && (Array.isArray(a) ? a.length : a)) extrasSet.add(s.toUpperCase());
+        });
+    });
+    const extras = Array.from(extrasSet);
+    
+    const sheets = [{ name: "Invoices", rows }];
+    for (const ext of extras) {
+        const extRows = sectionsData.flatMap(d => {
+            const arr = d.data[ext.toLowerCase()];
+            if (Array.isArray(arr)) {
+                return arr.map(r => ({ period: periodLabel(d.period), ...r }));
+            }
+            return [];
+        });
+        if (extRows.length) sheets.push({ name: ext.slice(0, 28), rows: extRows });
+    }
+    
     return (
         <div className="animate-fade-in">
-            <Tiles items={[["Taxable value", inr(t.taxable, 2)], [kind === "gstr1" ? "Total tax" : "Total ITC", inr(tax, 2), true], ["Invoices", String(rows.length)], ["Sections", String(Object.keys(sections).length)]]} />
-            <DownloadRow onXlsx={() => downloadWorkbook(`${name}.xlsx`, sheets)} onCsv={() => downloadCsv(`${name}.csv`, rows)} onJson={() => downloadJson(`${name}.json`, sections)} disabled={!rows.length && !extras.length} />
+            <Tiles items={[["Taxable value", inr(t.taxable, 2)], [kind === "gstr1" ? "Total tax" : "Total ITC", inr(tax, 2), true], ["Invoices", String(rows.length)], ["Periods", String(sectionsData.length)]]} />
+            <DownloadRow onXlsx={() => downloadWorkbook(`${name}.xlsx`, sheets)} onCsv={() => downloadCsv(`${name}.csv`, rows)} onJson={() => downloadJson(`${name}.json`, sectionsData)} disabled={!rows.length && !extras.length} />
             {extras.length > 0 && <p className="text-[11px] muted mb-2">Also in the download: {extras.join(", ")}</p>}
             {rows.length > 0 && (
                 <div className="card overflow-x-auto">
                     <table className="data-table">
-                        <thead><tr><th>Sec</th><th>{kind === "gstr1" ? "Buyer" : "Supplier"} / Doc</th><th className="text-right">Taxable</th><th className="text-right">Tax</th></tr></thead>
+                        <thead><tr><th>Period</th><th>Sec</th><th>{kind === "gstr1" ? "Buyer" : "Supplier"} / Doc</th><th className="text-right">Taxable</th><th className="text-right">Tax</th></tr></thead>
                         <tbody>
                             {rows.map((r, i) => (
                                 <tr key={i}>
+                                    <td className="text-[11px] font-medium whitespace-nowrap">{r.period}</td>
                                     <td className="text-[10px] muted">{r.section}</td>
                                     <td>{r.doc_no}<div className="font-mono text-[10px] muted">{r.ctin} · {r.doc_date}</div></td>
                                     <td className="text-right">{inr(r.taxable, 0)}</td>
@@ -288,20 +368,40 @@ function InvoiceView({ sections, kind, name }: { sections: Record<string, any>; 
 }
 
 // ── GSTR-3B ──
-function Gstr3bView({ data, name }: { data: any; name: string }) {
-    const blocks: TaxBlock[] = useMemo(() => parse3b(data), [data]);
+function Gstr3bView({ data, name }: { data: {period: string; data: any}[]; name: string }) {
+    const allBlocks = useMemo(() => {
+        const combined: TaxBlock[] = [];
+        data.forEach(d => combined.push(...parse3b(d.data, d.period)));
+        
+        const map = new Map<string, TaxBlock>();
+        combined.forEach(b => {
+            if (!map.has(b.block)) map.set(b.block, { block: b.block, label: b.label, rows: [] });
+            map.get(b.block)!.rows.push(...b.rows);
+        });
+        return Array.from(map.values()).sort((a, b) => a.block.localeCompare(b.block));
+    }, [data]);
+    
+    const excelSheets = useMemo(() => {
+        const sheets = [];
+        for (const b of allBlocks) {
+            sheets.push({ name: b.label.replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 31).trim(), rows: b.rows });
+        }
+        return sheets;
+    }, [allBlocks]);
+
     return (
         <div className="animate-fade-in">
-            <DownloadRow onJson={() => downloadJson(`${name}.json`, data)} />
-            {blocks.length === 0 && <div className="card p-4 muted text-sm">Fetched, but couldn't map the summary — the raw data is in the JSON download.</div>}
-            {blocks.map((b) => (
+            <DownloadRow onXlsx={() => downloadWorkbook(`${name}.xlsx`, excelSheets)} onJson={() => downloadJson(`${name}.json`, data)} disabled={!allBlocks.length} />
+            {allBlocks.length === 0 && <div className="card p-4 muted text-sm">Fetched, but couldn't map the summary — the raw data is in the JSON download.</div>}
+            {allBlocks.map((b) => (
                 <div key={b.block} className="card overflow-x-auto mb-3">
                     <div className="px-3 pt-3"><h3 className="font-semibold text-sm" style={{ color: "var(--color-text)" }}><span className="muted">{b.block}</span> · {b.label}</h3></div>
                     <table className="data-table mt-2">
-                        <thead><tr><th>Particulars</th><th className="text-right">Taxable</th><th className="text-right">IGST</th><th className="text-right">CGST</th><th className="text-right">SGST</th><th className="text-right">Cess</th></tr></thead>
+                        <thead><tr><th>Period</th><th>Particulars</th><th className="text-right">Taxable</th><th className="text-right">IGST</th><th className="text-right">CGST</th><th className="text-right">SGST</th><th className="text-right">Cess</th></tr></thead>
                         <tbody>
                             {b.rows.map((r, i) => (
                                 <tr key={i}>
+                                    <td className="text-[11px] font-medium whitespace-nowrap">{r.period}</td>
                                     <td>{r.label}</td>
                                     <td className="text-right">{r.txval != null ? inr(r.txval, 0) : "—"}</td>
                                     <td className="text-right">{inr(r.igst, 0)}</td>
