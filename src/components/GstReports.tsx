@@ -201,7 +201,7 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                 for (const p of range) {
                     try {
                         if (type === "gstr2b") {
-                            const raw = await cached(`rep:${gstin}:2b:${p}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, p, s.txn, s.gstUsername); return r.ok ? (r.data || { _empty: true }) : null; });
+                            const raw = await cached(`rep:${gstin}:2b:${p}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, p, s.txn, s.gstUsername); return r.ok ? (r.data || { _empty: true }) : { _empty: true, message: r.message }; });
                             if (raw && !raw._empty) allData.push({ period: p, data: raw });
                         } else if (type === "gstr1" || type === "gstr2a") {
                             let secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
@@ -211,12 +211,13 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                             const cacheKey = fetchMode === "essential" ? `rep:${gstin}:${type}:${p}:ess` : `rep:${gstin}:${type}:${p}`;
                             const raw = await cached(cacheKey, async () => {
                                 const acc: Record<string, any> = {};
-                                for (const sec of secs) { try { const r = await gstAPI.fetchSection(type, sec, gstin, p, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
-                                return Object.keys(acc).length ? acc : { _empty: true };
+                                let anySuccess = false;
+                                for (const sec of secs) { try { const r = await gstAPI.fetchSection(type, sec, gstin, p, s.txn, s.gstUsername); if (r.ok && r.data) { acc[sec] = (r.data as any)[sec] ?? r.data; anySuccess = true; } else if (r.ok) { anySuccess = true; } } catch { /* skip */ } }
+                                return Object.keys(acc).length ? acc : (anySuccess ? { _empty: true } : { _empty: true, message: "No data" });
                             });
                             if (raw && !raw._empty) allData.push({ period: p, data: raw });
                         } else if (type === "gstr3b") {
-                            const raw = await cached(`rep:${gstin}:3b:${p}`, async () => { const r = await gstAPI.fetch3b(gstin, p, s.txn, s.gstUsername); return r.ok ? (r.data || { _empty: true }) : null; });
+                            const raw = await cached(`rep:${gstin}:3b:${p}`, async () => { const r = await gstAPI.fetch3b(gstin, p, s.txn, s.gstUsername); return r.ok ? (r.data || { _empty: true }) : { _empty: true, message: r.message }; });
                             if (raw && !raw._empty) allData.push({ period: p, data: raw });
                         }
                     } catch (e) { hasError = true; } finally {
