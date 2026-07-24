@@ -198,11 +198,11 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                 let completed = 0;
                 setProgress(`Fetching 0/${range.length} months...`);
                 
-                await Promise.all(range.map(async (p) => {
+                for (const p of range) {
                     try {
                         if (type === "gstr2b") {
-                            const raw = await cached(`rep:${gstin}:2b:${p}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, p, s.txn, s.gstUsername); return r.ok ? r.data : null; });
-                            if (raw) allData.push({ period: p, data: raw });
+                            const raw = await cached(`rep:${gstin}:2b:${p}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, p, s.txn, s.gstUsername); return r.ok ? (r.data || { _empty: true }) : null; });
+                            if (raw && !raw._empty) allData.push({ period: p, data: raw });
                         } else if (type === "gstr1" || type === "gstr2a") {
                             let secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
                             if (fetchMode === "essential") {
@@ -212,18 +212,18 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                             const raw = await cached(cacheKey, async () => {
                                 const acc: Record<string, any> = {};
                                 for (const sec of secs) { try { const r = await gstAPI.fetchSection(type, sec, gstin, p, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
-                                return Object.keys(acc).length ? acc : null;
+                                return Object.keys(acc).length ? acc : { _empty: true };
                             });
-                            if (raw) allData.push({ period: p, data: raw });
+                            if (raw && !raw._empty) allData.push({ period: p, data: raw });
                         } else if (type === "gstr3b") {
-                            const raw = await cached(`rep:${gstin}:3b:${p}`, async () => { const r = await gstAPI.fetch3b(gstin, p, s.txn, s.gstUsername); return r.ok ? r.data : null; });
-                            if (raw) allData.push({ period: p, data: raw });
+                            const raw = await cached(`rep:${gstin}:3b:${p}`, async () => { const r = await gstAPI.fetch3b(gstin, p, s.txn, s.gstUsername); return r.ok ? (r.data || { _empty: true }) : null; });
+                            if (raw && !raw._empty) allData.push({ period: p, data: raw });
                         }
                     } catch (e) { hasError = true; } finally {
                         completed++;
                         setProgress(`Fetching ${completed}/${range.length} months...`);
                     }
-                }));
+                }
                 
                 allData.sort((a, b) => {
                     const d1 = new Date(+a.period.slice(2), +a.period.slice(0, 2) - 1);
