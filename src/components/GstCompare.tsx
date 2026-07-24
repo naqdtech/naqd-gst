@@ -5,8 +5,8 @@ import { gstAPI } from "../api/gst";
 import { sessionMinutesLeft } from "../utils/gstSession";
 import { cacheGet, cacheSet } from "../utils/cache";
 import {
-    fyList, fyPeriods, periodLabel, GSTR1_SECTIONS, GSTR2A_SECTIONS,
-    sumSections, total2bItc, totals3b, taxTotalTax,
+    fyList, fyPeriods, periodLabel, GSTR1_SECTIONS, GSTR2A_SECTIONS, getPeriodsBetween,
+    sumSections, total2bItc, totals3b, taxTotalTax, taxZero,
 } from "../utils/gst";
 import { downloadJson } from "../utils/gstExport";
 import { inr } from "../utils/format";
@@ -17,16 +17,20 @@ import type { TaxTotal } from "../utils/gst";
 const TTL = 24 * 60 * 60 * 1000;
 
 /** Fetch a return, reusing the SAME cache keys the Reports tab writes (so comparison is near-free). */
-async function loadReturn(type: string, gstin: string, period: string, s: GstSession): Promise<any | null> {
+async function loadReturn(type: string, gstin: string, period: string, s: GstSession, fetchMode: "essential" | "all"): Promise<any | null> {
     const short = type === "gstr2b" ? "2b" : type === "gstr3b" ? "3b" : type;
-    const key = `rep:${gstin}:${short}:${period}`;
+    const isMultiSec = type === "gstr1" || type === "gstr2a";
+    const key = isMultiSec && fetchMode === "essential" ? `rep:${gstin}:${short}:${period}:ess` : `rep:${gstin}:${short}:${period}`;
     const c = cacheGet<any>(key, TTL);
     if (c) return c;
     let raw: any = null;
     if (type === "gstr2b") { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, period, s.txn, s.gstUsername); raw = r.ok ? r.data : null; }
     else if (type === "gstr3b") { const r = await gstAPI.fetch3b(gstin, period, s.txn, s.gstUsername); raw = r.ok ? r.data : null; }
     else {
-        const secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
+        let secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
+        if (fetchMode === "essential") {
+            secs = type === "gstr1" ? ["b2b", "cdnr", "b2cs", "hsnsum"] : ["b2b", "cdn"];
+        }
         const acc: Record<string, any> = {};
         for (const sec of secs) { try { const r = await gstAPI.fetchSection(type as any, sec, gstin, period, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
         raw = Object.keys(acc).length ? acc : null;
@@ -43,30 +47,64 @@ interface Totals { g1: TaxTotal | null; g2a: TaxTotal | null; g2b: TaxTotal | nu
 
 function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) {
     const { gstin } = session;
-    const [fy, setFy] = useState(fyList()[0]);
-    const periods = useMemo(() => fyPeriods(fy), [fy]);
-    const [period, setPeriod] = useState(fyPeriods(fyList()[0])[0]);
+    const [fromFy, setFromFy] = useState(fyList()[0]);
+    const fromPeriods = useMemo(() => fyPeriods(fromFy), [fromFy]);
+    const [fromPeriod, setFromPeriod] = useState(() => fyPeriods(fyList()[0])[0]);
+    
+    const [toFy, setToFy] = useState(fyList()[0]);
+    const toPeriods = useMemo(() => fyPeriods(toFy), [toFy]);
+    const [toPeriod, setToPeriod] = useState(() => fyPeriods(fyList()[0])[11] || fyPeriods(fyList()[0])[0]);
+    
+    const [fetchMode, setFetchMode] = useState<"essential" | "all">("essential");
     const [loading, setLoading] = useState(false);
     const [t, setT] = useState<Totals | null>(null);
+    const [activeRange, setActiveRange] = useState("");
+
+    const creditsEst = useMemo(() => {
+        const count = getPeriodsBetween(fromPeriod, toPeriod).length;
+        const g1 = fetchMode === "essential" ? 4 : GSTR1_SECTIONS.length;
+        const g2a = fetchMode === "essential" ? 2 : GSTR2A_SECTIONS.length;
+        return count * (g1 + g2a + 2); // +2 for 2B and 3B
+    }, [fromPeriod, toPeriod, fetchMode]);
 
     const run = async () => {
-        setLoading(true); setT(null);
+        const range = getPeriodsBetween(fromPeriod, toPeriod);
+        if (!range.length) return toast.error("Invalid period range (From must be before To)");
+        
+        setLoading(true); setT(null); setActiveRange("");
         try {
-            const [g1, g2a, g2b, g3] = await Promise.all([
-                loadReturn("gstr1", gstin, period, session),
-                loadReturn("gstr2a", gstin, period, session),
-                loadReturn("gstr2b", gstin, period, session),
-                loadReturn("gstr3b", gstin, period, session),
-            ]);
-            if (!g1 && !g2a && !g2b && !g3) { toast.error("No data for this period (or session expired)"); return; }
-            const t3 = g3 ? totals3b(g3) : null;
+            const ag1 = taxZero(), ag2a = taxZero(), ag2b = taxZero(), ag3out = taxZero(), ag3itc = taxZero();
+            let hasG1 = false, hasG2a = false, hasG2b = false, hasG3 = false;
+            
+            await Promise.all(range.map(async (p) => {
+                const [g1, g2a, g2b, g3] = await Promise.all([
+                    loadReturn("gstr1", gstin, p, session, fetchMode),
+                    loadReturn("gstr2a", gstin, p, session, fetchMode),
+                    loadReturn("gstr2b", gstin, p, session, fetchMode),
+                    loadReturn("gstr3b", gstin, p, session, fetchMode),
+                ]);
+                
+                if (g1) { hasG1 = true; const st = sumSections(g1); ag1.taxable+=st.taxable; ag1.igst+=st.igst; ag1.cgst+=st.cgst; ag1.sgst+=st.sgst; ag1.cess+=st.cess; }
+                if (g2a) { hasG2a = true; const st = sumSections(g2a); ag2a.taxable+=st.taxable; ag2a.igst+=st.igst; ag2a.cgst+=st.cgst; ag2a.sgst+=st.sgst; ag2a.cess+=st.cess; }
+                if (g2b) { hasG2b = true; const st = total2bItc(g2b); ag2b.taxable+=st.taxable; ag2b.igst+=st.igst; ag2b.cgst+=st.cgst; ag2b.sgst+=st.sgst; ag2b.cess+=st.cess; }
+                if (g3) {
+                    hasG3 = true;
+                    const st = totals3b(g3);
+                    ag3out.taxable+=st.outward.taxable; ag3out.igst+=st.outward.igst; ag3out.cgst+=st.outward.cgst; ag3out.sgst+=st.outward.sgst; ag3out.cess+=st.outward.cess;
+                    ag3itc.taxable+=st.itc.taxable; ag3itc.igst+=st.itc.igst; ag3itc.cgst+=st.itc.cgst; ag3itc.sgst+=st.itc.sgst; ag3itc.cess+=st.itc.cess;
+                }
+            }));
+            
+            if (!hasG1 && !hasG2a && !hasG2b && !hasG3) { toast.error("No data for this range"); return; }
+            
             setT({
-                g1: g1 ? sumSections(g1) : null,
-                g2a: g2a ? sumSections(g2a) : null,
-                g2b: g2b ? total2bItc(g2b) : null,
-                g3out: t3 ? t3.outward : null,
-                g3itc: t3 ? t3.itc : null,
+                g1: hasG1 ? ag1 : null,
+                g2a: hasG2a ? ag2a : null,
+                g2b: hasG2b ? ag2b : null,
+                g3out: hasG3 ? ag3out : null,
+                g3itc: hasG3 ? ag3itc : null,
             });
+            setActiveRange(range.length === 1 ? periodLabel(range[0]) : `${periodLabel(range[0])} – ${periodLabel(range[range.length-1])}`);
         } catch (e: any) { toast.error(e.message); } finally { setLoading(false); }
     };
 
@@ -80,14 +118,39 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                 </span>
             </div>
 
-            <div className="flex gap-2 mb-3">
-                <select className="input flex-1" value={fy} onChange={(e) => { setFy(e.target.value); setPeriod(fyPeriods(e.target.value)[0]); }}>
-                    {fyList(6).map((y) => <option key={y} value={y}>FY {y}</option>)}
-                </select>
-                <select className="input flex-1" value={period} onChange={(e) => setPeriod(e.target.value)}>
-                    {periods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
-                </select>
+            <div className="flex flex-col gap-2 mb-3">
+                <div className="flex gap-2 items-end">
+                    <div className="flex-1"><label className="label">From</label>
+                    <select className="input" value={fromFy} onChange={(e) => { setFromFy(e.target.value); setFromPeriod(fyPeriods(e.target.value)[0]); }}>
+                        {fyList(6).map((y) => <option key={y} value={y}>FY {y}</option>)}
+                    </select>
+                    </div>
+                    <div className="flex-1">
+                    <select className="input" value={fromPeriod} onChange={(e) => setFromPeriod(e.target.value)}>
+                        {fromPeriods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
+                    </select>
+                    </div>
+                </div>
+                <div className="flex gap-2 items-end">
+                    <div className="flex-1"><label className="label">To</label>
+                    <select className="input" value={toFy} onChange={(e) => { setToFy(e.target.value); setToPeriod(fyPeriods(e.target.value)[0]); }}>
+                        {fyList(6).map((y) => <option key={y} value={y}>FY {y}</option>)}
+                    </select>
+                    </div>
+                    <div className="flex-1">
+                    <select className="input" value={toPeriod} onChange={(e) => setToPeriod(e.target.value)}>
+                        {toPeriods.map((p) => <option key={p} value={p}>{periodLabel(p)}</option>)}
+                    </select>
+                    </div>
+                </div>
             </div>
+            
+            <div className="mb-3 px-1 flex items-center gap-2">
+                <input type="checkbox" id="fetchModeCmp" checked={fetchMode === "all"} onChange={(e) => setFetchMode(e.target.checked ? "all" : "essential")} />
+                <label htmlFor="fetchModeCmp" className="text-sm muted select-none cursor-pointer">Include all minor sections (consumes more API credits)</label>
+            </div>
+            <p className="text-[11px] muted mb-2 px-1">Estimated API credits: <b>~{creditsEst}</b></p>
+            
             <button className="btn btn-primary w-full mb-4" onClick={run} disabled={loading}>
                 {loading ? <span className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(255,255,255,.4)", borderTopColor: "#fff" }} /> : <HiOutlineScale className="w-5 h-5" />}
                 {loading ? "Comparing…" : "Compare returns"}
@@ -95,8 +158,9 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
 
             {t && (
                 <div className="animate-fade-in">
+                    <h3 className="h2 text-center mb-3">Reconciliation for {activeRange}</h3>
                     <div className="flex justify-end mb-2">
-                        <button className="btn btn-ghost btn-sm" onClick={() => downloadJson(`compare_${gstin}_${period}.json`, t)}><HiOutlineArrowDownTray className="w-4 h-4" /> JSON</button>
+                        <button className="btn btn-ghost btn-sm" onClick={() => downloadJson(`compare_${gstin}_${fromPeriod}-${toPeriod}.json`, t)}><HiOutlineArrowDownTray className="w-4 h-4" /> JSON</button>
                     </div>
                     <CompareCard title="GSTR-1 vs GSTR-3B" subtitle="Outward supplies / tax liability" aLabel="GSTR-1" bLabel="GSTR-3B · 3.1" a={t.g1} b={t.g3out} showTaxable />
                     <CompareCard title="GSTR-2B vs GSTR-3B" subtitle="ITC available vs ITC claimed" aLabel="GSTR-2B" bLabel="GSTR-3B · Tbl 4" a={t.g2b} b={t.g3itc} />

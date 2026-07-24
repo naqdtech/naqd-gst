@@ -181,12 +181,20 @@ export function parse3b(data: any, period?: string): TaxBlock[] {
 /** Normalise a ledger payload into an array of transaction rows (best-effort across shapes). */
 export function ledgerRows(data: any): Record<string, any>[] {
     const d = data?.data ?? data;
-    if (Array.isArray(d)) return d;
-    if (d && typeof d === "object") {
-        const arr = Object.values(d).find((v) => Array.isArray(v)) as any[] | undefined;
-        if (arr) return arr;
-    }
-    return [];
+    
+    const findArray = (obj: any, depth = 0): any[] | null => {
+        if (depth > 5 || !obj || typeof obj !== "object") return null;
+        if (Array.isArray(obj)) return obj;
+        for (const val of Object.values(obj)) {
+            if (Array.isArray(val)) return val;
+            const nested = findArray(val, depth + 1);
+            if (nested) return nested;
+        }
+        return null;
+    };
+    
+    const arr = findArray(d);
+    return arr || [];
 }
 
 // ── Comparison (GSTR-1↔3B, 2B↔3B, 2A↔3B) ──

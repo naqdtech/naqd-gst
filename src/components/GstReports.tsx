@@ -126,9 +126,36 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
     const [frdt, setFrdt] = useState(fyStartISO(fyList()[0]));
     const [todt, setTodt] = useState(todayISO());
     const [loading, setLoading] = useState(false);
+    const [fetchMode, setFetchMode] = useState<"essential" | "all">("essential");
     const [report, setReport] = useState<{ type: ReportType; raw: any; label: string } | null>(null);
 
     const kind = REPORTS.find((r) => r.key === type)!.kind;
+
+    // Credit estimator
+    const creditsEst = useMemo(() => {
+        if (kind !== "period_range") return 1;
+        const count = getPeriodsBetween(fromPeriod, toPeriod).length;
+        if (type === "gstr1") return fetchMode === "essential" ? count * 4 : count * GSTR1_SECTIONS.length;
+        if (type === "gstr2a") return fetchMode === "essential" ? count * 2 : count * GSTR2A_SECTIONS.length;
+        return count; // 2B and 3B use 1 call per month
+    }, [kind, fromPeriod, toPeriod, type, fetchMode]);
+    
+    // Ledger max 6 months logic
+    const handleTodt = (val: string) => {
+        setTodt(val);
+        const d = new Date(val);
+        d.setMonth(d.getMonth() - 6);
+        const minFrdt = d.toISOString().slice(0, 10);
+        if (frdt < minFrdt) setFrdt(minFrdt);
+    };
+    const handleFrdt = (val: string) => {
+        setFrdt(val);
+        const d = new Date(val);
+        d.setMonth(d.getMonth() + 6);
+        const maxTodt = d.toISOString().slice(0, 10);
+        const t = todayISO();
+        if (todt > maxTodt) setTodt(maxTodt < t ? maxTodt : t);
+    };
 
     const run = async () => {
         setLoading(true); setReport(null);
@@ -146,8 +173,12 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                             const raw = await cached(`rep:${gstin}:2b:${p}`, async () => { const r = await gstAPI.fetchSection("gstr2b", "all", gstin, p, s.txn, s.gstUsername); return r.ok ? r.data : null; });
                             if (raw) allData.push({ period: p, data: raw });
                         } else if (type === "gstr1" || type === "gstr2a") {
-                            const secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
-                            const raw = await cached(`rep:${gstin}:${type}:${p}`, async () => {
+                            let secs = type === "gstr1" ? GSTR1_SECTIONS : GSTR2A_SECTIONS;
+                            if (fetchMode === "essential") {
+                                secs = type === "gstr1" ? ["b2b", "cdnr", "b2cs", "hsnsum"] : ["b2b", "cdn"];
+                            }
+                            const cacheKey = fetchMode === "essential" ? `rep:${gstin}:${type}:${p}:ess` : `rep:${gstin}:${type}:${p}`;
+                            const raw = await cached(cacheKey, async () => {
                                 const acc: Record<string, any> = {};
                                 for (const sec of secs) { try { const r = await gstAPI.fetchSection(type, sec, gstin, p, s.txn, s.gstUsername); if (r.ok && r.data) acc[sec] = (r.data as any)[sec] ?? r.data; } catch { /* skip */ } }
                                 return Object.keys(acc).length ? acc : null;
@@ -230,11 +261,24 @@ function Runner({ session, onEnd }: { session: GstSession; onEnd: () => void }) 
                     </div>
                 </div>
             ) : (
-                <div className="flex gap-2 mb-3 items-end">
-                    <div className="flex-1"><label className="label">From</label><input type="date" className="input" value={frdt} max={todt} onChange={(e) => setFrdt(e.target.value)} /></div>
-                    <div className="flex-1"><label className="label">To</label><input type="date" className="input" value={todt} min={frdt} max={todayISO()} onChange={(e) => setTodt(e.target.value)} /></div>
+                <div className="flex flex-col gap-2 mb-3">
+                    <div className="flex gap-2 items-end">
+                        <div className="flex-1"><label className="label">From</label><input type="date" className="input" value={frdt} max={todt} onChange={(e) => handleFrdt(e.target.value)} /></div>
+                        <div className="flex-1"><label className="label">To</label><input type="date" className="input" value={todt} min={frdt} max={todayISO()} onChange={(e) => handleTodt(e.target.value)} /></div>
+                    </div>
+                    <p className="text-[11px] muted">Max 6 months allowed per GST portal rules.</p>
                 </div>
             )}
+            
+            {(type === "gstr1" || type === "gstr2a") && kind === "period_range" && (
+                <div className="mb-3 px-1 flex items-center gap-2">
+                    <input type="checkbox" id="fetchMode" checked={fetchMode === "all"} onChange={(e) => setFetchMode(e.target.checked ? "all" : "essential")} />
+                    <label htmlFor="fetchMode" className="text-sm muted select-none cursor-pointer">Include all minor sections (consumes more API credits)</label>
+                </div>
+            )}
+            
+            <p className="text-[11px] muted mb-2 px-1">Estimated API credits: <b>~{creditsEst}</b></p>
+
 
             <button className="btn btn-primary w-full mb-4" onClick={run} disabled={loading}>
                 {loading ? <span className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(255,255,255,.4)", borderTopColor: "#fff" }} /> : <HiOutlineArrowPath className="w-5 h-5" />}
