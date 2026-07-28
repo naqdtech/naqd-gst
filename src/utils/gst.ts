@@ -237,7 +237,11 @@ export const taxTotalTax = (t: TaxTotal) => t.igst + t.cgst + t.sgst + t.cess;
 export function sumSections(sections: Record<string, any>): TaxTotal {
     const t = taxZero();
     for (const [s, arr] of Object.entries(sections)) {
-        if (isInvoiceSection(s)) {
+        if (s === "nil" && arr?.inv && Array.isArray(arr.inv)) {
+            for (const r of arr.inv) {
+                t.taxable += n(r.expt_amt) + n(r.nil_amt) + n(r.ngsup_amt);
+            }
+        } else if (isInvoiceSection(s)) {
             for (const r of flattenInvSection(arr, s)) { t.taxable += r.taxable; t.igst += r.igst; t.cgst += r.cgst; t.sgst += r.sgst; t.cess += r.cess; }
         } else if (Array.isArray(arr)) {
             for (const r of arr) { t.taxable += n(r.txval); t.igst += n(r.iamt); t.cgst += n(r.camt); t.sgst += n(r.samt); t.cess += n(r.csamt); }
