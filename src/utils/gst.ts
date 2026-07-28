@@ -85,36 +85,45 @@ function docdata(data: any): Record<string, Gstr2bSupplier[]> {
 export function flattenGstr2b(data: any, period?: string): Record<string, any>[] {
     const dd = docdata(data);
     const rows: Record<string, any>[] = [];
-    const push = (section: string, suppliers: Gstr2bSupplier[] = []) => {
-        for (const s of suppliers) {
-            for (const inv of s.inv || []) {
+    const extract = (section: string, arr: any[]) => {
+        if (!Array.isArray(arr)) return;
+        const mult = section.startsWith("CDN") ? -1 : 1;
+        for (const item of arr) {
+            const docs = item.inv || item.nt || item.boe || item.doclist || item.isdDoc || (item.inum || item.boenum ? [item] : []);
+            for (const doc of docs) {
                 const baseRow = period ? { period: periodLabel(period) } : {};
                 rows.push({
                     ...baseRow,
                     section,
-                    supplier_gstin: s.ctin,
-                    supplier: s.trdnm,
-                    sup_period: s.supprd,
-                    sup_filed: s.supfildt,
-                    inv_no: inv.inum,
-                    inv_date: inv.dt,
-                    inv_value: inv.val,
-                    taxable: inv.txval,
-                    igst: inv.igst,
-                    cgst: inv.cgst,
-                    sgst: inv.sgst,
-                    cess: inv.cess,
-                    itc_avl: inv.itcavl,
-                    reason: inv.rsn,
-                    ims: inv.imsStatus,
+                    supplier_gstin: item.ctin || item.portcode || "",
+                    supplier: item.trdnm || "",
+                    sup_period: item.supprd || "",
+                    sup_filed: item.supfildt || "",
+                    inv_no: doc.inum || doc.nt_num || doc.boenum || doc.docnum || "",
+                    inv_date: doc.dt || doc.nt_dt || doc.boedt || doc.docdt || "",
+                    inv_value: n(doc.val),
+                    taxable: n(doc.txval) * mult,
+                    igst: n(doc.igst) * mult,
+                    cgst: n(doc.cgst) * mult,
+                    sgst: n(doc.sgst) * mult,
+                    cess: n(doc.cess) * mult,
+                    itc_avl: doc.itcavl || doc.itcelg || "",
+                    reason: doc.rsn || "",
+                    ims: doc.imsStatus || "",
                 });
             }
         }
     };
-    push("B2B", dd.b2b);
-    push("B2BA", (dd as any).b2ba);
-    push("CDNR", (dd as any).cdnr);
-    push("CDNRA", (dd as any).cdnra);
+    
+    extract("B2B", dd.b2b);
+    extract("B2BA", dd.b2ba);
+    extract("CDNR", dd.cdnr);
+    extract("CDNRA", dd.cdnra);
+    extract("IMPG", dd.impg);
+    extract("IMPGSEZ", dd.impgsez);
+    extract("ISD", dd.isd);
+    extract("ISDA", dd.isda);
+    
     return rows;
 }
 
@@ -284,34 +293,40 @@ export function totalsGstr2b(data: any, ret_period: string): GstPeriodTotals {
 export const GSTR1_SECTIONS = ["b2b", "b2ba", "b2cl", "b2cla", "b2cs", "b2csa", "cdnr", "cdnra", "cdnur", "cdnura", "exp", "expa", "nil", "hsnsum"];
 export const GSTR2A_SECTIONS = ["b2b", "b2ba", "cdn", "cdna", "impg", "impgsez", "isd", "tds", "tcs"];
 
-const INVOICE_SECTIONS = new Set(["b2b", "b2ba", "cdnr", "cdnra", "cdn", "cdna", "cdnur", "cdnura", "exp", "expa"]);
+const INVOICE_SECTIONS = new Set(["b2b", "b2ba", "cdnr", "cdnra", "cdn", "cdna", "cdnur", "cdnura", "exp", "expa", "impg", "impgsez", "isd", "isda"]);
 export function isInvoiceSection(s: string): boolean {
     return INVOICE_SECTIONS.has(s.toLowerCase());
 }
 
-/** Flatten a ctin + inv[]/nt[] section (GSTR-1/2A B2B, CDN, EXP…) into invoice rows.
- *  Tax lives in inv.itms[].itm_det = {txval, iamt(IGST), camt(CGST), samt(SGST), csamt(cess), rt}. */
+/** Flatten a ctin + inv[]/nt[] section (GSTR-1/2A B2B, CDN, EXP…) into invoice rows. */
 export function flattenInvSection(sectionArr: any, label: string, period?: string): Record<string, any>[] {
     const rows: Record<string, any>[] = [];
+    const mult = label.toLowerCase().startsWith("cdn") ? -1 : 1;
     for (const sup of (Array.isArray(sectionArr) ? sectionArr : [])) {
-        const docs = sup.inv || sup.nt || [];
+        const docs = sup.inv || sup.nt || sup.boe || sup.doclist || sup.isdDoc || (sup.inum || sup.boenum ? [sup] : []);
         for (const doc of (Array.isArray(docs) ? docs : [])) {
             let txval = 0, igst = 0, cgst = 0, sgst = 0, cess = 0;
-            for (const it of (doc.itms || [])) {
+            const items = doc.itms || doc.itc_elg || (doc.txval || doc.igst ? [doc] : []);
+            for (const it of items) {
                 const dt = it.itm_det || it || {};
-                txval += n(dt.txval); igst += n(dt.iamt); cgst += n(dt.camt); sgst += n(dt.samt); cess += n(dt.csamt);
+                txval += n(dt.txval); igst += n(dt.iamt || dt.igst); cgst += n(dt.camt || dt.cgst); sgst += n(dt.samt || dt.sgst); cess += n(dt.csamt || dt.cess);
             }
             const baseRow = period ? { period: periodLabel(period) } : {};
             rows.push({
                 ...baseRow,
                 section: label,
-                ctin: sup.ctin || "",
-                doc_no: doc.inum || doc.nt_num || "",
-                doc_date: doc.idt || doc.nt_dt || "",
+                ctin: sup.ctin || sup.portcode || "",
+                doc_no: doc.inum || doc.nt_num || doc.boenum || doc.docnum || "",
+                doc_date: doc.idt || doc.nt_dt || doc.boedt || doc.docdt || "",
                 value: n(doc.val),
                 pos: doc.pos || "",
                 type: doc.inv_typ || doc.ntty || "",
-                taxable: txval, igst, cgst, sgst, cess, tax: igst + cgst + sgst + cess,
+                taxable: txval * mult, 
+                igst: igst * mult, 
+                cgst: cgst * mult, 
+                sgst: sgst * mult, 
+                cess: cess * mult, 
+                tax: (igst + cgst + sgst + cess) * mult,
             });
         }
     }
