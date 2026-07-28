@@ -11,7 +11,9 @@ import { cacheGet, cacheSet } from "../utils/cache";
 import {
     fyList, fyPeriods, periodLabel, flattenGstr2b, totalsGstr2b, getPeriodsBetween, taxZero, taxTotalTax,
     flattenInvSection, isInvoiceSection, GSTR1_SECTIONS, GSTR2A_SECTIONS, parse3b, ledgerRows,
+    friendlyOtpError, isApiAccessError,
 } from "../utils/gst";
+import ApiAccessHelp from "./ApiAccessHelp";
 import { downloadJson, downloadCsv, downloadWorkbook } from "../utils/gstExport";
 import { inr } from "../utils/format";
 import type { GstSession } from "../types";
@@ -55,14 +57,15 @@ function OtpPanel({ gstin, gstUsername, onDone }: { gstin: string; gstUsername?:
     const [otp, setOtp] = useState("");
     const [stage, setStage] = useState<"idle" | "sent">("idle");
     const [busy, setBusy] = useState(false);
+    const [needsAccess, setNeedsAccess] = useState(false);
 
     const send = async () => {
         if (!gu.trim()) return toast.error("Enter the GST portal username");
         setBusy(true);
         try {
             const r = await gstAPI.otpRequest(gstin, gu.trim());
-            if (r.ok && r.txn) { setTxn(r.txn); setStage("sent"); toast.success("OTP sent to the taxpayer's registered mobile/email"); }
-            else toast.error(r.message || "Could not send OTP");
+            if (r.ok && r.txn) { setTxn(r.txn); setStage("sent"); setNeedsAccess(false); toast.success("OTP sent to the taxpayer's registered mobile/email"); }
+            else { toast.error(friendlyOtpError(r.message)); setNeedsAccess(isApiAccessError(r.message)); }
         } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
     };
     const verify = async () => {
@@ -105,7 +108,8 @@ function OtpPanel({ gstin, gstUsername, onDone }: { gstin: string; gstUsername?:
                     </div>
                 </div>
             )}
-            <p className="text-[11px] muted mt-3">OTP goes to the taxpayer's GST-registered mobile/email. API access must be enabled on the GST portal.</p>
+            <p className="text-[11px] muted mt-3">OTP goes to the taxpayer's GST-registered mobile/email.</p>
+            <ApiAccessHelp alert={needsAccess} />
         </div>
     );
 }

@@ -12,6 +12,27 @@ export function periodLabel(p: string): string {
     return `${MONTHS[m - 1] || p.slice(0, 2)} ${p.slice(2)}`;
 }
 
+/**
+ * True when the GST portal / GSP rejected the request because **API access isn't
+ * enabled** for this GSTIN (or its "Manage API Access" duration is ≤ the 6-hour token).
+ * GSTN's message: "API access is not available or user expiry Duration is less than or
+ * equal to auth token expiry duration".
+ */
+export function isApiAccessError(msg?: string): boolean {
+    const m = (msg || "").toLowerCase();
+    return m.includes("api access") || m.includes("expiry duration") || m.includes("auth token expiry");
+}
+
+/** Turn a raw WhiteBooks/GSTN error into something a practitioner can act on. */
+export function friendlyOtpError(msg?: string): string {
+    if (isApiAccessError(msg))
+        return "API access isn't enabled for this GSTIN on the GST portal (or its duration is ≤ 6 hours). Enable it under My Profile → Manage API Access (set Duration to 30 days), then resend the OTP.";
+    const m = (msg || "").toLowerCase();
+    if (m.includes("invalid") && m.includes("otp")) return "Incorrect OTP — check the code and try again, or resend.";
+    if (m.includes("transaction")) return "This OTP session expired — please resend the OTP.";
+    return msg || "Something went wrong — please try again.";
+}
+
 /** FY "2025-26" → the 12 MMYYYY periods, Apr → Mar. */
 export function fyPeriods(fy: string): string[] {
     const m = fy.match(/^(\d{4})-(\d{2})$/);
