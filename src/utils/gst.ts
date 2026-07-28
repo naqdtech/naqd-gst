@@ -246,11 +246,8 @@ export function sumSections(sections: Record<string, any>): TaxTotal {
     return t;
 }
 
-/** GSTR-2B ITC-available total, from itcsumm. */
+/** GSTR-2B ITC-available total, built by summing all extracted documents. */
 export function total2bItc(data: any): TaxTotal {
-    const nrs = ((data?.data?.data || data?.data || data)?.itcsumm?.itcavl?.nonrevsup) || {};
-    // fall back to summing docs if itcsumm absent
-    if (nrs && (nrs.igst != null || nrs.cgst != null)) return { taxable: 0, igst: n(nrs.igst), cgst: n(nrs.cgst), sgst: n(nrs.sgst), cess: n(nrs.cess) };
     const t = totalsGstr2b(data, "");
     return { taxable: t.taxable, igst: t.igst, cgst: t.cgst, sgst: t.sgst, cess: t.cess };
 }
